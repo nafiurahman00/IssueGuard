@@ -40,8 +40,8 @@ def parse_args():
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="Number of worker processes (default: 1)"
+        default=4,
+        help="Number of worker processes (default: 4)"
     )
     
     return parser.parse_args()
