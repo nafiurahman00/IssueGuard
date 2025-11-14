@@ -110,9 +110,31 @@ style.innerHTML = `
     z-index: 10000;
     white-space: pre-line;
     max-width: 420px;
+    max-height: 400px;
+    overflow-y: auto;
+    overflow-x: hidden;
     line-height: 1.6;
     animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     backdrop-filter: blur(10px);
+    pointer-events: auto;
+  }
+  
+  .secret-detector-tooltip::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  .secret-detector-tooltip::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+  }
+  
+  .secret-detector-tooltip::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+  }
+  
+  .secret-detector-tooltip::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
   }
   
   .secret-detector-tooltip::after {
@@ -540,24 +562,58 @@ function startChecking(descriptionField) {
   // Set up highlight tracking for scroll and resize
   setupHighlightTracking(descriptionField);
   
-  // Show tooltip on hover
-  indicator.addEventListener("mouseenter", () => {
+  // Tooltip hide timer
+  let tooltipHideTimer = null;
+  
+  // Function to show tooltip
+  const showTooltip = () => {
+    // Clear any existing hide timer
+    if (tooltipHideTimer) {
+      clearTimeout(tooltipHideTimer);
+      tooltipHideTimer = null;
+    }
+    
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !currentTooltip) {
       currentTooltip = document.createElement("div");
       currentTooltip.className = "secret-detector-tooltip";
       currentTooltip.innerHTML = tooltipHTML;
       descriptionField.parentElement.appendChild(currentTooltip);
+      
+      // Add event listeners to tooltip to keep it visible when hovering
+      currentTooltip.addEventListener("mouseenter", () => {
+        if (tooltipHideTimer) {
+          clearTimeout(tooltipHideTimer);
+          tooltipHideTimer = null;
+        }
+      });
+      
+      currentTooltip.addEventListener("mouseleave", () => {
+        hideTooltipWithDelay();
+      });
     }
-  });
+  };
   
-  // Hide tooltip on mouse leave
-  indicator.addEventListener("mouseleave", () => {
-    if (currentTooltip) {
-      currentTooltip.remove();
-      currentTooltip = null;
+  // Function to hide tooltip with delay
+  const hideTooltipWithDelay = () => {
+    if (tooltipHideTimer) {
+      clearTimeout(tooltipHideTimer);
     }
-  });
+    
+    tooltipHideTimer = setTimeout(() => {
+      if (currentTooltip) {
+        currentTooltip.remove();
+        currentTooltip = null;
+      }
+      tooltipHideTimer = null;
+    }, 300); // 300ms delay before hiding
+  };
+  
+  // Show tooltip on hover
+  indicator.addEventListener("mouseenter", showTooltip);
+  
+  // Hide tooltip on mouse leave with delay
+  indicator.addEventListener("mouseleave", hideTooltipWithDelay);
   
   console.log("Starting secret detection with debounced input...");
   

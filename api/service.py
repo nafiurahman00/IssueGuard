@@ -20,7 +20,7 @@ class SecretDetectionService:
         self,
         regex_manager: RegexPatternManager,
         model_manager: ModelManager,
-        max_workers: int = 4,
+        max_workers: int = 1,
         cache_size: int = 128
     ):
         """
@@ -30,19 +30,23 @@ class SecretDetectionService:
             regex_manager: Manager for regex patterns
             model_manager: Manager for ML model
             max_workers: Maximum number of worker threads for inference
-            cache_size: Maximum number of cached inference results (LRU)
+            cache_size: Maximum number of cached inference results (LRU). Set to 0 to disable caching.
         """
         self.regex_manager = regex_manager
         self.model_manager = model_manager
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.cache_size = cache_size
+        self.cache_enabled = cache_size > 0
         
         # Statistics
         self.cache_hits = 0
         self.cache_misses = 0
         
         print(f"✓ Thread pool initialized with {max_workers} workers")
-        print(f"✓ LRU cache initialized with size {cache_size}")
+        if self.cache_enabled:
+            print(f"✓ LRU cache initialized with size {cache_size}")
+        else:
+            print(f"✓ Caching disabled")
     
     def _create_context_key(self, text: str, candidate_string: str) -> str:
         """
@@ -77,6 +81,10 @@ class SecretDetectionService:
         Returns:
             Tuple of (prediction, is_secret) or None if not cached
         """
+        # Return None immediately if caching is disabled
+        if not self.cache_enabled:
+            return None
+        
         if not hasattr(self, '_inference_cache'):
             self._inference_cache = {}
             self._cache_order = []
@@ -100,6 +108,10 @@ class SecretDetectionService:
             prediction: The model prediction (0 or 1)
             is_secret: Whether it's a secret
         """
+        # Don't cache if caching is disabled
+        if not self.cache_enabled:
+            return
+        
         if not hasattr(self, '_inference_cache'):
             self._inference_cache = {}
             self._cache_order = []
@@ -275,15 +287,30 @@ class SecretDetectionService:
         total_requests = self.cache_hits + self.cache_misses
         cache_hit_rate = (self.cache_hits / total_requests * 100) if total_requests > 0 else 0.0
         
+        cache_size_current = 0
+        if hasattr(self, '_inference_cache'):
+            cache_size_current = len(self._inference_cache)
+        
         return {
             'patterns_loaded': self.regex_manager.get_pattern_count(),
             'patterns_failed': self.regex_manager.get_failed_pattern_count(),
             'device': self.model_manager.get_device(),
-            'cache_size': self.cache_size,
+            'cache_enabled': self.cache_enabled,
+            'cache_size_limit': self.cache_size,
+            'cache_size_current': cache_size_current,
             'cache_hits': self.cache_hits,
             'cache_misses': self.cache_misses,
             'cache_hit_rate': cache_hit_rate
         }
+    
+    def clear_cache(self):
+        """Clear the inference cache."""
+        if hasattr(self, '_inference_cache'):
+            self._inference_cache.clear()
+            self._cache_order.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
+        print("✓ Cache cleared")
     
     def shutdown(self):
         """Shutdown the thread pool executor."""

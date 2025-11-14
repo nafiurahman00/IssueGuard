@@ -65,7 +65,11 @@ def create_app() -> FastAPI:
             
             # Initialize detection service
             print("\nInitializing detection service...")
-            service = SecretDetectionService(regex_manager, model_manager)
+            service = SecretDetectionService(
+                regex_manager, 
+                model_manager,
+                cache_size=settings.CACHE_SIZE
+            )
             
             # Set service in routes
             set_detection_service(service)
@@ -74,6 +78,8 @@ def create_app() -> FastAPI:
             print("✓ Server initialized successfully")
             print(f"✓ Device: {model_manager.get_device()}")
             print(f"✓ Patterns loaded: {regex_manager.get_pattern_count()}")
+            cache_status = f"enabled (size: {settings.CACHE_SIZE})" if settings.ENABLE_CACHE else "disabled"
+            print(f"✓ Cache: {cache_status}")
             print("="*70 + "\n")
             
         except Exception as e:

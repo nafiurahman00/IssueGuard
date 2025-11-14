@@ -26,12 +26,16 @@ class Settings:
     
     # Inference Settings
     MAX_LENGTH: int = 256
-    WINDOW_SIZE: int = 200
+    WINDOW_SIZE: int = 100
     USE_QUANTIZATION: bool = False
     DEVICE: Optional[str] = None  # None for auto-detect
     
     # Default Inference Parameters
     DEFAULT_BATCH_SIZE: int = 32
+    
+    # Cache Settings
+    ENABLE_CACHE: bool = True
+    CACHE_SIZE: int = 128
     
     @classmethod
     def validate(cls) -> bool:
