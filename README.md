@@ -25,7 +25,7 @@ Link: https://arxiv.org/abs/2410.23657
 ### Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/nafiurahman00/IssueGuard.git
 cd IssueGuard
 ```
 
