@@ -57,7 +57,7 @@ Regex-captured false positives are ignored based on the model’s classification
 
 Example GitHub issue pages for testing:
 
-https://github.com/<any-repo>/issues/new
+https://github.com/*any-repo*/issues/new
 
 Any public issue creation form containing text inputs
 
