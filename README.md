@@ -10,7 +10,7 @@ The overall methodology of IssueGuard is shown below:
 
 IssueGuard classifies extracted candidates into two categories: **Secret** and **Non-sensitive**, based on the annotation criteria defined in the following work:
 
-*Ahmed, Sadif, Md Nafiu Rahman, Zahin Wahab, Gias Uddin, and Rifat Shahriyar. "Secret Breach Prevention in Software Issue Reports." (2025).*
+*Sadif Ahmed, Md Nafiu Rahman, Zahin Wahab, Gias Uddin, and Rifat Shahriyar. "Secret Breach Prevention in Software Issue Reports." (2025).*
 Link: https://arxiv.org/abs/2410.23657
 
 
@@ -33,6 +33,16 @@ cd IssueGuard
 ```bash
 pip install -r requirements_fastapi.txt
 ```
+
+### Download the Model
+Download the pre-trained CodeBERT model from GitHub releases:
+
+1. Go to the [GitHub Releases page](https://github.com/nafiurahman00/IssueGuard/releases)
+2. Download the `models.zip` file from the latest release
+3. Extract the `models.zip` file in the root directory of the project
+
+After extraction, verify that the model files are present at:  
+`models/balanced/microsoft_codebert-base_complete/`
 
 ### Start the FastAPI Server
 ```bash
