@@ -1,3 +1,8 @@
+// ============================================================================
+// IssueGuard Content Script
+// Real-time secret detection for GitHub issue forms
+// ============================================================================
+
 // State management
 let debounceTimer = null;
 let isChecking = false;
@@ -8,6 +13,29 @@ let lastCheckedText = "";
 const DEBOUNCE_DELAY_MS = 1000; // 1 second debounce delay (Grammarly-like behavior)
 let currentHighlights = []; // Track all active highlights
 let highlightObserver = null; // Intersection observer for scroll tracking
+
+// ============================================================================
+// THEME CONFIGURATION
+// ============================================================================
+// Set to 'dark' or 'light' to change the tooltip appearance
+// - 'dark': Black background with white text (default)
+// - 'light': White background with dark text
+// ============================================================================
+const TOOLTIP_THEME = 'light'; // Change this to 'light' for light mode
+
+// Helper function to get theme-appropriate inline styles
+function getTooltipItemStyles() {
+  if (TOOLTIP_THEME === 'light') {
+    return {
+      background: 'rgba(0,0,0,0.08)',
+      borderLeft: '3px solid rgba(0,0,0,0.3)'
+    };
+  }
+  return {
+    background: 'rgba(255,255,255,0.15)',
+    borderLeft: '3px solid rgba(255,255,255,0.5)'
+  };
+}
 
 function createIndicator() {
   const indicator = document.createElement("div");
@@ -100,13 +128,10 @@ style.innerHTML = `
     position: absolute;
     right: 55px;
     top: 10px;
-    background: linear-gradient(135deg, #000000 0%, #1a1a1a 50%, #2d2d2d 100%);
-    color: white;
     padding: 16px 20px;
     border-radius: 12px;
     font-size: 13px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(59, 130, 246, 0.3);
     z-index: 10000;
     white-space: pre-line;
     max-width: 420px;
@@ -119,25 +144,60 @@ style.innerHTML = `
     pointer-events: auto;
   }
   
-  .secret-detector-tooltip::-webkit-scrollbar {
+  /* Dark theme styles */
+  .secret-detector-tooltip.theme-dark {
+    background: linear-gradient(135deg, #000000 0%, #1a1a1a 50%, #2d2d2d 100%);
+    color: white;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(59, 130, 246, 0.3);
+  }
+  
+  /* Light theme styles */
+  .secret-detector-tooltip.theme-light {
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 50%, #e9ecef 100%);
+    color: #1a1a1a;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 0 0 1px rgba(59, 130, 246, 0.2);
+  }
+  
+  /* Dark theme scrollbar */
+  .secret-detector-tooltip.theme-dark::-webkit-scrollbar {
     width: 8px;
   }
   
-  .secret-detector-tooltip::-webkit-scrollbar-track {
+  .secret-detector-tooltip.theme-dark::-webkit-scrollbar-track {
     background: rgba(255, 255, 255, 0.1);
     border-radius: 4px;
   }
   
-  .secret-detector-tooltip::-webkit-scrollbar-thumb {
+  .secret-detector-tooltip.theme-dark::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.3);
     border-radius: 4px;
   }
   
-  .secret-detector-tooltip::-webkit-scrollbar-thumb:hover {
+  .secret-detector-tooltip.theme-dark::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.5);
   }
   
-  .secret-detector-tooltip::after {
+  /* Light theme scrollbar */
+  .secret-detector-tooltip.theme-light::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  .secret-detector-tooltip.theme-light::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+  }
+  
+  .secret-detector-tooltip.theme-light::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+  }
+  
+  .secret-detector-tooltip.theme-light::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+  }
+  
+  /* Dark theme arrow */
+  .secret-detector-tooltip.theme-dark::after {
     content: '';
     position: absolute;
     right: -10px;
@@ -148,6 +208,20 @@ style.innerHTML = `
     border-style: solid;
     border-width: 10px 0 10px 10px;
     border-color: transparent transparent transparent #1a1a1a;
+  }
+  
+  /* Light theme arrow */
+  .secret-detector-tooltip.theme-light::after {
+    content: '';
+    position: absolute;
+    right: -10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 10px 0 10px 10px;
+    border-color: transparent transparent transparent #f8f9fa;
   }
   
   @keyframes fadeIn {
@@ -161,7 +235,8 @@ style.innerHTML = `
     }
   }
   
-  .secret-badge {
+  /* Dark theme badges */
+  .secret-badge.theme-dark {
     display: inline-block;
     background: rgba(244, 67, 54, 0.2);
     color: #ff6b6b;
@@ -175,7 +250,7 @@ style.innerHTML = `
     border: 1px solid rgba(244, 67, 54, 0.3);
   }
   
-  .safe-badge {
+  .safe-badge.theme-dark {
     display: inline-block;
     background: rgba(76, 175, 80, 0.2);
     color: #4ade80;
@@ -187,6 +262,35 @@ style.innerHTML = `
     letter-spacing: 0.5px;
     text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     border: 1px solid rgba(76, 175, 80, 0.3);
+  }
+  
+  /* Light theme badges */
+  .secret-badge.theme-light {
+    display: inline-block;
+    background: rgba(244, 67, 54, 0.15);
+    color: #d32f2f;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 11px;
+    margin-right: 6px;
+    letter-spacing: 0.5px;
+    text-shadow: none;
+    border: 1px solid rgba(244, 67, 54, 0.4);
+  }
+  
+  .safe-badge.theme-light {
+    display: inline-block;
+    background: rgba(76, 175, 80, 0.15);
+    color: #2e7d32;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 11px;
+    margin-right: 6px;
+    letter-spacing: 0.5px;
+    text-shadow: none;
+    border: 1px solid rgba(76, 175, 80, 0.4);
   }
   
   .secret-highlight {
@@ -319,8 +423,8 @@ function createMirrorDiv(textarea) {
   mirror.style.padding = computedStyle.padding;
   mirror.style.border = computedStyle.border;
   mirror.style.boxSizing = computedStyle.boxSizing;
-  mirror.style.width = textarea.offsetWidth + 'px';
-  mirror.style.height = textarea.offsetHeight + 'px';
+  mirror.style.width = textarea.scrollWidth + 'px';
+  mirror.style.height = textarea.scrollHeight + 'px';
   mirror.style.left = '-9999px';
   mirror.style.top = '-9999px';
   mirror.style.overflow = 'hidden';
@@ -476,11 +580,12 @@ async function checkDescription(descriptionField, indicator, spinner) {
         updateHighlightPositions(descriptionField, secretStrings);
         
         // Create detailed tooltip content
+        const itemStyles = getTooltipItemStyles();
         let tooltipHTML = `<div style="font-weight: 700; margin-bottom: 12px; font-size: 15px;">⚠️ Secrets Detected</div>`;
         
         filteredSecrets.forEach((candidate, i) => {
-          tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.15); border-radius: 8px; border-left: 3px solid rgba(255,255,255,0.5);">`;
-          tooltipHTML += `<span class="secret-badge">🔴 SECRET</span>`;
+          tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: ${itemStyles.background}; border-radius: 8px; border-left: ${itemStyles.borderLeft};">`;
+          tooltipHTML += `<span class="secret-badge theme-${TOOLTIP_THEME}">🔴 SECRET</span>`;
           tooltipHTML += `<div style="margin-top: 6px; font-size: 12px; font-weight: 600; word-break: break-all;">${escapeHtml(candidate.candidate_string.substring(0, 70))}${candidate.candidate_string.length > 70 ? '...' : ''}</div>`;
           tooltipHTML += `<div style="margin-top: 4px; font-size: 11px; opacity: 0.8;">Type: ${escapeHtml(candidate.secret_type)}</div>`;
           tooltipHTML += `</div>`;
@@ -576,7 +681,7 @@ function startChecking(descriptionField) {
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !currentTooltip) {
       currentTooltip = document.createElement("div");
-      currentTooltip.className = "secret-detector-tooltip";
+      currentTooltip.className = `secret-detector-tooltip theme-${TOOLTIP_THEME}`;
       currentTooltip.innerHTML = tooltipHTML;
       descriptionField.parentElement.appendChild(currentTooltip);
       
@@ -963,24 +1068,58 @@ function startCheckingCommentField(commentField, fieldIndex) {
   // Set up highlight tracking for scroll and resize
   setupHighlightTracking(commentField);
   
-  // Show tooltip on hover
-  indicator.addEventListener("mouseenter", () => {
+  // Tooltip hide timer
+  let tooltipHideTimer = null;
+  
+  // Function to show tooltip
+  const showTooltip = () => {
+    // Clear any existing hide timer
+    if (tooltipHideTimer) {
+      clearTimeout(tooltipHideTimer);
+      tooltipHideTimer = null;
+    }
+    
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !fieldData.tooltip) {
       fieldData.tooltip = document.createElement("div");
-      fieldData.tooltip.className = "secret-detector-tooltip";
+      fieldData.tooltip.className = `secret-detector-tooltip theme-${TOOLTIP_THEME}`;
       fieldData.tooltip.innerHTML = tooltipHTML;
       commentField.parentElement.appendChild(fieldData.tooltip);
+      
+      // Add event listeners to tooltip to keep it visible when hovering
+      fieldData.tooltip.addEventListener("mouseenter", () => {
+        if (tooltipHideTimer) {
+          clearTimeout(tooltipHideTimer);
+          tooltipHideTimer = null;
+        }
+      });
+      
+      fieldData.tooltip.addEventListener("mouseleave", () => {
+        hideTooltipWithDelay();
+      });
     }
-  });
+  };
   
-  // Hide tooltip on mouse leave
-  indicator.addEventListener("mouseleave", () => {
-    if (fieldData.tooltip) {
-      fieldData.tooltip.remove();
-      fieldData.tooltip = null;
+  // Function to hide tooltip with delay
+  const hideTooltipWithDelay = () => {
+    if (tooltipHideTimer) {
+      clearTimeout(tooltipHideTimer);
     }
-  });
+    
+    tooltipHideTimer = setTimeout(() => {
+      if (fieldData.tooltip) {
+        fieldData.tooltip.remove();
+        fieldData.tooltip = null;
+      }
+      tooltipHideTimer = null;
+    }, 300); // 300ms delay before hiding
+  };
+  
+  // Show tooltip on hover
+  indicator.addEventListener("mouseenter", showTooltip);
+  
+  // Hide tooltip on mouse leave with delay
+  indicator.addEventListener("mouseleave", hideTooltipWithDelay);
   
   // Perform an immediate check if there's existing content
   const initialText = commentField.value.trim();
@@ -1084,11 +1223,12 @@ async function checkCommentField(commentField, fieldData) {
         updateHighlightPositions(commentField, secretStrings);
         
         // Create detailed tooltip content
+        const itemStyles = getTooltipItemStyles();
         let tooltipHTML = `<div style="font-weight: 700; margin-bottom: 12px; font-size: 15px;">⚠️ Secrets Detected</div>`;
         
         filteredSecrets.forEach((candidate, i) => {
-          tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.15); border-radius: 8px; border-left: 3px solid rgba(255,255,255,0.5);">`;
-          tooltipHTML += `<span class="secret-badge">🔴 SECRET</span>`;
+          tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: ${itemStyles.background}; border-radius: 8px; border-left: ${itemStyles.borderLeft};">`;
+          tooltipHTML += `<span class="secret-badge theme-${TOOLTIP_THEME}">🔴 SECRET</span>`;
           tooltipHTML += `<div style="margin-top: 6px; font-size: 12px; font-weight: 600; word-break: break-all;">${escapeHtml(candidate.candidate_string.substring(0, 70))}${candidate.candidate_string.length > 70 ? '...' : ''}</div>`;
           tooltipHTML += `<div style="margin-top: 4px; font-size: 11px; opacity: 0.8;">Type: ${escapeHtml(candidate.secret_type)}</div>`;
           tooltipHTML += `</div>`;
