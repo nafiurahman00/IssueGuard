@@ -6,7 +6,7 @@ This system helps users analyze issue content directly on the GitHub page, preve
 
 The overall methodology of IssueGuard is shown below:
 
-(Insert system diagram here)
+![IssueGuard System Diagram](assets/IssueGuard.png)
 
 IssueGuard classifies extracted candidates into two categories: **Secret** and **Non-sensitive**, based on the annotation criteria defined in the following work:
 
@@ -72,5 +72,5 @@ https://github.com/*any-repo*/issues/new
 Any public issue creation form containing text inputs
 
 ### Links
-Video demonstration (optional, to be added)
+Video demonstration: https://www.youtube.com/watch?v=kvbWA8rr9cU
 

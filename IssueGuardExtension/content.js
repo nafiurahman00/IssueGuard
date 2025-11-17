@@ -17,15 +17,58 @@ let highlightObserver = null; // Intersection observer for scroll tracking
 // ============================================================================
 // THEME CONFIGURATION
 // ============================================================================
-// Set to 'dark' or 'light' to change the tooltip appearance
-// - 'dark': Black background with white text (default)
-// - 'light': White background with dark text
+// Dynamically detect GitHub's light/dark mode
 // ============================================================================
-const TOOLTIP_THEME = 'light'; // Change this to 'light' for light mode
+
+// Helper function to detect current GitHub theme
+function detectGitHubTheme() {
+  // Method 1: Check data-color-mode attribute on html or body
+  const htmlColorMode = document.documentElement.getAttribute('data-color-mode');
+  const bodyColorMode = document.body.getAttribute('data-color-mode');
+  
+  if (htmlColorMode === 'dark' || bodyColorMode === 'dark') {
+    return 'dark';
+  }
+  if (htmlColorMode === 'light' || bodyColorMode === 'light') {
+    return 'light';
+  }
+  
+  // Method 2: Check for dark mode class on html or body
+  if (document.documentElement.classList.contains('dark') || 
+      document.documentElement.classList.contains('dark-theme') ||
+      document.body.classList.contains('dark') ||
+      document.body.classList.contains('dark-theme')) {
+    return 'dark';
+  }
+  
+  // Method 3: Check data-theme attribute
+  const htmlTheme = document.documentElement.getAttribute('data-theme');
+  const bodyTheme = document.body.getAttribute('data-theme');
+  if (htmlTheme && htmlTheme.includes('dark')) return 'dark';
+  if (bodyTheme && bodyTheme.includes('dark')) return 'dark';
+  if (htmlTheme && htmlTheme.includes('light')) return 'light';
+  if (bodyTheme && bodyTheme.includes('light')) return 'light';
+  
+  // Method 4: Check computed background color of body
+  const bodyBgColor = window.getComputedStyle(document.body).backgroundColor;
+  if (bodyBgColor) {
+    // Parse RGB values
+    const rgb = bodyBgColor.match(/\d+/g);
+    if (rgb && rgb.length >= 3) {
+      const brightness = (parseInt(rgb[0]) * 299 + parseInt(rgb[1]) * 587 + parseInt(rgb[2]) * 114) / 1000;
+      // If brightness is less than 128, it's likely dark mode
+      return brightness < 128 ? 'dark' : 'light';
+    }
+  }
+  
+  // Default to light if unable to detect
+  return 'light';
+}
 
 // Helper function to get theme-appropriate inline styles
 function getTooltipItemStyles() {
-  if (TOOLTIP_THEME === 'light') {
+  const theme = detectGitHubTheme();
+  if (theme === 'light') {
     return {
       background: 'rgba(0,0,0,0.08)',
       borderLeft: '3px solid rgba(0,0,0,0.3)'
@@ -585,7 +628,7 @@ async function checkDescription(descriptionField, indicator, spinner) {
         
         filteredSecrets.forEach((candidate, i) => {
           tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: ${itemStyles.background}; border-radius: 8px; border-left: ${itemStyles.borderLeft};">`;
-          tooltipHTML += `<span class="secret-badge theme-${TOOLTIP_THEME}">🔴 SECRET</span>`;
+          tooltipHTML += `<span class="secret-badge theme-${detectGitHubTheme()}">🔴 SECRET</span>`;
           tooltipHTML += `<div style="margin-top: 6px; font-size: 12px; font-weight: 600; word-break: break-all;">${escapeHtml(candidate.candidate_string.substring(0, 70))}${candidate.candidate_string.length > 70 ? '...' : ''}</div>`;
           tooltipHTML += `<div style="margin-top: 4px; font-size: 11px; opacity: 0.8;">Type: ${escapeHtml(candidate.secret_type)}</div>`;
           tooltipHTML += `</div>`;
@@ -681,7 +724,7 @@ function startChecking(descriptionField) {
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !currentTooltip) {
       currentTooltip = document.createElement("div");
-      currentTooltip.className = `secret-detector-tooltip theme-${TOOLTIP_THEME}`;
+      currentTooltip.className = `secret-detector-tooltip theme-${detectGitHubTheme()}`;
       currentTooltip.innerHTML = tooltipHTML;
       descriptionField.parentElement.appendChild(currentTooltip);
       
@@ -1082,7 +1125,7 @@ function startCheckingCommentField(commentField, fieldIndex) {
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !fieldData.tooltip) {
       fieldData.tooltip = document.createElement("div");
-      fieldData.tooltip.className = `secret-detector-tooltip theme-${TOOLTIP_THEME}`;
+      fieldData.tooltip.className = `secret-detector-tooltip theme-${detectGitHubTheme()}`;
       fieldData.tooltip.innerHTML = tooltipHTML;
       commentField.parentElement.appendChild(fieldData.tooltip);
       
@@ -1228,7 +1271,7 @@ async function checkCommentField(commentField, fieldData) {
         
         filteredSecrets.forEach((candidate, i) => {
           tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: ${itemStyles.background}; border-radius: 8px; border-left: ${itemStyles.borderLeft};">`;
-          tooltipHTML += `<span class="secret-badge theme-${TOOLTIP_THEME}">🔴 SECRET</span>`;
+          tooltipHTML += `<span class="secret-badge theme-${detectGitHubTheme()}">🔴 SECRET</span>`;
           tooltipHTML += `<div style="margin-top: 6px; font-size: 12px; font-weight: 600; word-break: break-all;">${escapeHtml(candidate.candidate_string.substring(0, 70))}${candidate.candidate_string.length > 70 ? '...' : ''}</div>`;
           tooltipHTML += `<div style="margin-top: 4px; font-size: 11px; opacity: 0.8;">Type: ${escapeHtml(candidate.secret_type)}</div>`;
           tooltipHTML += `</div>`;
@@ -1413,9 +1456,55 @@ function init() {
   };
 }
 
+// ============================================================================
+// THEME CHANGE OBSERVER
+// ============================================================================
+// Watch for GitHub theme changes and update tooltip themes dynamically
+function setupThemeObserver() {
+  const themeObserver = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.type === 'attributes' && 
+          (mutation.attributeName === 'data-color-mode' || 
+           mutation.attributeName === 'data-theme' || 
+           mutation.attributeName === 'class')) {
+        console.log('GitHub theme changed, updating tooltips...');
+        
+        // Update all existing tooltips
+        const currentTheme = detectGitHubTheme();
+        
+        // Update main tooltip if exists
+        if (currentTooltip) {
+          currentTooltip.className = `secret-detector-tooltip theme-${currentTheme}`;
+        }
+        
+        // Update all comment field tooltips
+        activeCommentMonitors.forEach((fieldData) => {
+          if (fieldData.tooltip) {
+            fieldData.tooltip.className = `secret-detector-tooltip theme-${currentTheme}`;
+          }
+        });
+      }
+    });
+  });
+  
+  // Observe both html and body elements for theme changes
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-color-mode', 'data-theme', 'class']
+  });
+  
+  themeObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['data-color-mode', 'data-theme', 'class']
+  });
+  
+  console.log('Theme observer initialized');
+}
+
 // Cleanup when extension is unloaded
 window.addEventListener('beforeunload', () => {
   cleanupPreviousElements();
 });
 
 init();
+setupThemeObserver();
