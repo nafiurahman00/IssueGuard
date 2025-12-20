@@ -190,7 +190,7 @@ def run_inference(
             
             # Use mixed precision for inference if enabled and on GPU
             use_amp = use_fp16 and device.type == 'cuda'
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast("cuda", enabled=use_amp):
                 outputs = model(**kwargs)
                 loss = outputs.loss
             

@@ -15,32 +15,61 @@ let currentHighlights = []; // Track all active highlights
 let highlightObserver = null; // Intersection observer for scroll tracking
 
 // ============================================================================
-// THEME CONFIGURATION
+// PLATFORM DETECTION
 // ============================================================================
-// Dynamically detect GitHub's light/dark mode
+// Detect whether we're on GitHub or GitLab
 // ============================================================================
 
-// Helper function to detect current GitHub theme
+function detectPlatform() {
+  const hostname = window.location.hostname;
+  if (hostname.includes('gitlab')) return 'gitlab';
+  return 'github';
+}
+
+// ============================================================================
+// THEME CONFIGURATION
+// ============================================================================
+// Dynamically detect GitHub/GitLab light/dark mode
+// ============================================================================
+
+// Helper function to detect current theme (GitHub or GitLab)
 function detectGitHubTheme() {
+  const platform = detectPlatform();
+
+  // GitLab-specific theme detection
+  if (platform === 'gitlab') {
+    // GitLab uses 'gl-dark' class on the html element for dark mode
+    if (document.documentElement.classList.contains('gl-dark')) {
+      return 'dark';
+    }
+    // Also check for theme classes
+    if (document.documentElement.classList.contains('dark-mode') ||
+      document.body.classList.contains('dark-mode')) {
+      return 'dark';
+    }
+    return 'light';
+  }
+
+  // GitHub theme detection (existing logic)
   // Method 1: Check data-color-mode attribute on html or body
   const htmlColorMode = document.documentElement.getAttribute('data-color-mode');
   const bodyColorMode = document.body.getAttribute('data-color-mode');
-  
+
   if (htmlColorMode === 'dark' || bodyColorMode === 'dark') {
     return 'dark';
   }
   if (htmlColorMode === 'light' || bodyColorMode === 'light') {
     return 'light';
   }
-  
+
   // Method 2: Check for dark mode class on html or body
-  if (document.documentElement.classList.contains('dark') || 
-      document.documentElement.classList.contains('dark-theme') ||
-      document.body.classList.contains('dark') ||
-      document.body.classList.contains('dark-theme')) {
+  if (document.documentElement.classList.contains('dark') ||
+    document.documentElement.classList.contains('dark-theme') ||
+    document.body.classList.contains('dark') ||
+    document.body.classList.contains('dark-theme')) {
     return 'dark';
   }
-  
+
   // Method 3: Check data-theme attribute
   const htmlTheme = document.documentElement.getAttribute('data-theme');
   const bodyTheme = document.body.getAttribute('data-theme');
@@ -48,7 +77,7 @@ function detectGitHubTheme() {
   if (bodyTheme && bodyTheme.includes('dark')) return 'dark';
   if (htmlTheme && htmlTheme.includes('light')) return 'light';
   if (bodyTheme && bodyTheme.includes('light')) return 'light';
-  
+
   // Method 4: Check computed background color of body
   const bodyBgColor = window.getComputedStyle(document.body).backgroundColor;
   if (bodyBgColor) {
@@ -60,7 +89,7 @@ function detectGitHubTheme() {
       return brightness < 128 ? 'dark' : 'light';
     }
   }
-  
+
   // Default to light if unable to detect
   return 'light';
 }
@@ -100,21 +129,21 @@ function createIndicator() {
   indicator.style.justifyContent = "center";
   indicator.style.fontSize = "18px";
   indicator.innerHTML = "🛡️";
-  
+
   // Add pulsing animation for initial state
   indicator.style.animation = "pulse 2s infinite";
-  
+
   // Add hover effect
   indicator.addEventListener("mouseenter", () => {
     indicator.style.transform = "scale(1.15)";
     indicator.style.boxShadow = "0 6px 20px rgba(102, 126, 234, 0.5)";
   });
-  
+
   indicator.addEventListener("mouseleave", () => {
     indicator.style.transform = "scale(1)";
     indicator.style.boxShadow = "0 4px 16px rgba(102, 126, 234, 0.3)";
   });
-  
+
   return indicator;
 }
 
@@ -369,53 +398,142 @@ function createHighlightOverlay(textarea, secretString) {
   return overlay;
 }
 
+// Function to highlight secrets in contenteditable elements using CSS Custom Highlight API
+// This API highlights text without modifying the DOM structure
+function updateHighlightPositionsContentEditable(element, secretStrings) {
+  // Check if CSS Custom Highlight API is supported
+  if (!CSS.highlights) {
+    console.log('[IssueGuard] CSS Custom Highlight API not supported, falling back to tooltip only');
+    return;
+  }
+
+  // Clear any existing highlights
+  CSS.highlights.delete('secret-highlight');
+
+  const allRanges = [];
+
+  // Use TreeWalker to find all text nodes
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT,
+    null,
+    false
+  );
+
+  const textNodes = [];
+  let node;
+  while (node = walker.nextNode()) {
+    if (node.textContent.trim().length > 0) {
+      textNodes.push(node);
+    }
+  }
+
+  console.log(`[IssueGuard] Found ${textNodes.length} text nodes, searching for ${secretStrings.length} secrets`);
+
+  // For each secret string, find it in the text nodes and create ranges
+  secretStrings.forEach(secretString => {
+    textNodes.forEach(textNode => {
+      const text = textNode.textContent;
+      let startIndex = 0;
+      let index;
+
+      while ((index = text.indexOf(secretString, startIndex)) !== -1) {
+        try {
+          // Create a range for this occurrence
+          const range = new Range();
+          range.setStart(textNode, index);
+          range.setEnd(textNode, Math.min(index + secretString.length, text.length));
+          allRanges.push(range);
+        } catch (e) {
+          console.log('[IssueGuard] Error creating range:', e);
+        }
+        startIndex = index + 1;
+      }
+    });
+  });
+
+  // Create a Highlight object with all ranges and register it
+  if (allRanges.length > 0) {
+    const highlight = new Highlight(...allRanges);
+    CSS.highlights.set('secret-highlight', highlight);
+    console.log(`[IssueGuard] Created CSS highlight with ${allRanges.length} ranges`);
+  }
+
+  // Store reference for cleanup
+  element._cssHighlightActive = true;
+  element._highlightRanges = allRanges;
+}
+
+// Add CSS for the custom highlight (only once)
+if (!document.querySelector('#issueguard-highlight-style')) {
+  const highlightStyle = document.createElement('style');
+  highlightStyle.id = 'issueguard-highlight-style';
+  highlightStyle.textContent = `
+    ::highlight(secret-highlight) {
+      background-color: rgba(244, 67, 54, 0.35);
+      color: inherit;
+    }
+  `;
+  document.head.appendChild(highlightStyle);
+}
+
 // Function to position highlights based on text position in textarea
+// Supports both textareas AND contenteditable elements (like GitLab's ProseMirror editor)
 function updateHighlightPositions(textarea, secretStrings) {
   // Remove existing highlights
   removeHighlights(textarea);
-  
+
   if (!secretStrings || secretStrings.length === 0) {
     return;
   }
-  
-  const text = textarea.value;
+
+  // Use CSS Custom Highlight API for contenteditable elements
+  if (textarea.isContentEditable || textarea.getAttribute('contenteditable') === 'true' || textarea.tagName !== 'TEXTAREA') {
+    console.log('[IssueGuard] Using CSS Custom Highlight API for contenteditable');
+    updateHighlightPositionsContentEditable(textarea, secretStrings);
+    return;
+  }
+
+  const text = getElementText(textarea);
+  if (!text) return; // Safety check for empty/undefined text
+
   const highlights = [];
-  
+
   // Create a mirror div to measure text positions
   const mirror = createMirrorDiv(textarea);
-  
+
   // Get textarea's current scroll position and boundaries
   const textareaRect = textarea.getBoundingClientRect();
   const scrollTop = textarea.scrollTop;
   const scrollLeft = textarea.scrollLeft;
-  
+
   // Get textarea's position relative to its parent
   const textareaOffsetLeft = textarea.offsetLeft;
   const textareaOffsetTop = textarea.offsetTop;
-  
+
   secretStrings.forEach(secretString => {
     let startIndex = 0;
     let index;
-    
+
     // Find all occurrences of this secret string
     while ((index = text.indexOf(secretString, startIndex)) !== -1) {
       // Check if the text still matches (hasn't been edited)
       const actualText = text.substring(index, index + secretString.length);
       if (actualText === secretString) {
         const position = getTextPosition(mirror, text, index, secretString.length, textarea);
-        
+
         if (position) {
           const overlay = createHighlightOverlay(textarea, secretString);
-          
+
           // Adjust position based on scroll and textarea offset within parent
           const adjustedLeft = textareaOffsetLeft + position.left - scrollLeft;
           const adjustedTop = textareaOffsetTop + position.top - scrollTop;
-          
+
           overlay.style.left = adjustedLeft + 'px';
           overlay.style.top = adjustedTop + 'px';
           overlay.style.width = position.width + 'px';
           overlay.style.height = position.height + 'px';
-          
+
           highlights.push({
             element: overlay,
             secretString: secretString,
@@ -427,21 +545,21 @@ function updateHighlightPositions(textarea, secretStrings) {
             textareaOffsetLeft: textareaOffsetLeft,
             textareaOffsetTop: textareaOffsetTop
           });
-          
+
           // Append to textarea's parent
           if (textarea.parentElement) {
             textarea.parentElement.appendChild(overlay);
           }
         }
       }
-      
+
       startIndex = index + 1;
     }
   });
-  
+
   // Clean up mirror
   mirror.remove();
-  
+
   // Store highlights reference
   textarea._highlights = highlights;
   currentHighlights = currentHighlights.concat(highlights);
@@ -451,7 +569,7 @@ function updateHighlightPositions(textarea, secretStrings) {
 function createMirrorDiv(textarea) {
   const mirror = document.createElement('div');
   const computedStyle = window.getComputedStyle(textarea);
-  
+
   // Copy relevant styles
   mirror.style.position = 'absolute';
   mirror.style.visibility = 'hidden';
@@ -471,7 +589,7 @@ function createMirrorDiv(textarea) {
   mirror.style.left = '-9999px';
   mirror.style.top = '-9999px';
   mirror.style.overflow = 'hidden';
-  
+
   document.body.appendChild(mirror);
   return mirror;
 }
@@ -481,37 +599,37 @@ function getTextPosition(mirror, fullText, startIndex, length, textarea) {
   try {
     const textBefore = fullText.substring(0, startIndex);
     const targetText = fullText.substring(startIndex, startIndex + length);
-    
+
     // Set mirror scroll to match textarea (for accurate measurement)
     if (textarea) {
       mirror.scrollTop = 0;
       mirror.scrollLeft = 0;
     }
-    
+
     // Create spans to measure position
     mirror.innerHTML = '';
-    
+
     const beforeSpan = document.createElement('span');
     beforeSpan.textContent = textBefore;
     mirror.appendChild(beforeSpan);
-    
+
     const targetSpan = document.createElement('span');
     targetSpan.textContent = targetText;
     targetSpan.style.backgroundColor = 'rgba(244, 67, 54, 0.3)';
     mirror.appendChild(targetSpan);
-    
+
     const afterSpan = document.createElement('span');
     afterSpan.textContent = fullText.substring(startIndex + length);
     mirror.appendChild(afterSpan);
-    
+
     // Get position relative to mirror (without scroll offset)
     const targetRect = targetSpan.getBoundingClientRect();
     const mirrorRect = mirror.getBoundingClientRect();
-    
+
     // Calculate position within the mirror's content
     const relativeLeft = targetRect.left - mirrorRect.left + mirror.scrollLeft;
     const relativeTop = targetRect.top - mirrorRect.top + mirror.scrollTop;
-    
+
     return {
       left: relativeLeft,
       top: relativeTop,
@@ -534,13 +652,25 @@ function removeHighlights(textarea) {
     });
     textarea._highlights = [];
   }
-  
+
   // Also remove any orphaned highlights in the parent
   if (textarea.parentElement) {
     const orphanedHighlights = textarea.parentElement.querySelectorAll('.secret-highlight-overlay');
     orphanedHighlights.forEach(h => h.remove());
   }
-  
+
+  // For contenteditable: clean up CSS Custom Highlight API
+  if (textarea._cssHighlightActive && CSS.highlights) {
+    CSS.highlights.delete('secret-highlight');
+    textarea._cssHighlightActive = false;
+  }
+
+  // Legacy: clean up body-appended overlays
+  if (textarea._isContentEditable) {
+    const bodyHighlights = document.body.querySelectorAll('.secret-highlight-overlay');
+    bodyHighlights.forEach(h => h.remove());
+  }
+
   // Clear from global tracking
   currentHighlights = currentHighlights.filter(h => h.element.parentElement);
 }
@@ -553,19 +683,19 @@ function setupHighlightTracking(textarea) {
       // Update each highlight position based on scroll
       const scrollTop = textarea.scrollTop;
       const scrollLeft = textarea.scrollLeft;
-      
+
       textarea._highlights.forEach(highlight => {
         if (highlight.element && highlight.element.parentElement) {
           const adjustedLeft = highlight.textareaOffsetLeft + highlight.baseLeft - scrollLeft;
           const adjustedTop = highlight.textareaOffsetTop + highlight.baseTop - scrollTop;
-          
+
           highlight.element.style.left = adjustedLeft + 'px';
           highlight.element.style.top = adjustedTop + 'px';
         }
       });
     }
   });
-  
+
   // Update on resize
   const resizeObserver = new ResizeObserver(() => {
     if (textarea._highlights && textarea._highlights.length > 0) {
@@ -574,7 +704,7 @@ function setupHighlightTracking(textarea) {
       updateHighlightPositions(textarea, uniqueSecrets);
     }
   });
-  
+
   resizeObserver.observe(textarea);
   textarea._resizeObserver = resizeObserver;
 }
@@ -586,10 +716,10 @@ async function checkDescription(descriptionField, indicator, spinner) {
     console.log("Check already in progress, skipping...");
     return;
   }
-  
+
   isChecking = true;
-  const description = descriptionField.value.trim();
-  
+  const description = getElementText(descriptionField).trim();
+
   try {
     spinner.style.display = "block";
     const response = await checkForSecrets(description);
@@ -605,27 +735,27 @@ async function checkDescription(descriptionField, indicator, spinner) {
         indicator.style.border = "3px solid #d32f2f";
         indicator.style.boxShadow = "0 4px 16px rgba(244, 67, 54, 0.3)";
         indicator.style.animation = "pulseRed 2s infinite";
-        
+
         // Filter to only secrets (not safe candidates)
         const secretCandidates = response.all_candidates.filter(c => c.is_secret);
-        
+
         // Remove candidates that are substrings of other candidates
         const filteredSecrets = secretCandidates.filter((candidate, index, arr) => {
           return !arr.some((other, otherIndex) => {
             if (index === otherIndex) return false;
-            return other.candidate_string.includes(candidate.candidate_string) && 
-                   other.candidate_string !== candidate.candidate_string;
+            return other.candidate_string.includes(candidate.candidate_string) &&
+              other.candidate_string !== candidate.candidate_string;
           });
         });
-        
+
         // Highlight the secret strings in the textarea
         const secretStrings = filteredSecrets.map(s => s.candidate_string);
         updateHighlightPositions(descriptionField, secretStrings);
-        
+
         // Create detailed tooltip content
         const itemStyles = getTooltipItemStyles();
         let tooltipHTML = `<div style="font-weight: 700; margin-bottom: 12px; font-size: 15px;">⚠️ Secrets Detected</div>`;
-        
+
         filteredSecrets.forEach((candidate, i) => {
           tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: ${itemStyles.background}; border-radius: 8px; border-left: ${itemStyles.borderLeft};">`;
           tooltipHTML += `<span class="secret-badge theme-${detectGitHubTheme()}">🔴 SECRET</span>`;
@@ -633,19 +763,19 @@ async function checkDescription(descriptionField, indicator, spinner) {
           tooltipHTML += `<div style="margin-top: 4px; font-size: 11px; opacity: 0.8;">Type: ${escapeHtml(candidate.secret_type)}</div>`;
           tooltipHTML += `</div>`;
         });
-        
+
         indicator.setAttribute('data-tooltip', tooltipHTML);
       } else {
         // Green indicator - no secrets
         // Remove any existing highlights
         removeHighlights(descriptionField);
-        
+
         indicator.innerHTML = "✅";
         indicator.style.backgroundColor = "#4caf50";
         indicator.style.border = "3px solid #388e3c";
         indicator.style.boxShadow = "0 4px 16px rgba(76, 175, 80, 0.3)";
         indicator.style.animation = "pulse 2s infinite";
-        
+
         const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">✅ You're Safe!</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">No secrets detected in your text</div>`;
         indicator.setAttribute('data-tooltip', tooltipHTML);
       }
@@ -656,19 +786,19 @@ async function checkDescription(descriptionField, indicator, spinner) {
       indicator.style.border = "3px solid #f57c00";
       indicator.style.boxShadow = "0 4px 16px rgba(255, 152, 0, 0.3)";
       indicator.style.animation = "pulse 2s infinite";
-      
+
       const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">⚠️ Connection Error</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">Unable to check for secrets. Please ensure the API is running.</div>`;
       indicator.setAttribute('data-tooltip', tooltipHTML);
     }
   } catch (error) {
     console.error("Error in checkDescription:", error);
     spinner.style.display = "none";
-    
+
     indicator.innerHTML = "❌";
     indicator.style.backgroundColor = "#ff9800";
     indicator.style.border = "3px solid #f57c00";
     indicator.style.boxShadow = "0 4px 16px rgba(255, 152, 0, 0.3)";
-    
+
     const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">❌ Error</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">An error occurred while checking</div>`;
     indicator.setAttribute('data-tooltip', tooltipHTML);
   } finally {
@@ -683,36 +813,80 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// Helper function to get text content from any element (textarea or contenteditable)
+function getElementText(element) {
+  if (!element) return '';
+
+  // For textareas and inputs, use .value
+  if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
+    return element.value || '';
+  }
+
+  // For contenteditable elements (ProseMirror, etc.), use textContent
+  if (element.isContentEditable || element.getAttribute('contenteditable') === 'true') {
+    return element.textContent || element.innerText || '';
+  }
+
+  // For elements with .value property (some custom elements)
+  if ('value' in element) {
+    return element.value || '';
+  }
+
+  // Fallback to textContent
+  return element.textContent || element.innerText || '';
+}
+
 function startChecking(descriptionField) {
-  // Don't start if already monitoring this field
+  // Check if already monitoring this field AND the indicator is still in the DOM
+  // If the indicator was removed (e.g., modal closed), we need to reinitialize
   if (descriptionField._secretDetectorHandler) {
-    console.log("Field already being monitored, skipping...");
-    return;
+    const existingIndicator = descriptionField.parentElement?.querySelector('.secret-detector-indicator');
+    if (existingIndicator) {
+      console.log("[IssueGuard] Field already being monitored with indicator present, skipping...");
+      return;
+    } else {
+      console.log("[IssueGuard] Handler exists but indicator missing - cleaning up and reinitializing...");
+      // Reset lastCheckedText so the same content will trigger a new scan
+      lastCheckedText = "";
+      // Clean up the stale handler
+      if (descriptionField._contentObserver) {
+        descriptionField._contentObserver.disconnect();
+        delete descriptionField._contentObserver;
+      }
+      descriptionField.removeEventListener('input', descriptionField._secretDetectorHandler);
+      delete descriptionField._secretDetectorHandler;
+    }
   }
-  
-  // Clean up any existing elements for this field
-  if (currentIndicator && currentIndicator.parentElement === descriptionField.parentElement) {
-    console.log("Cleaning up existing elements for this field...");
-    cleanupPreviousElements();
+
+  // Clean up any existing global elements
+  if (currentIndicator && currentIndicator.parentElement) {
+    console.log("[IssueGuard] Cleaning up existing global elements...");
+    currentIndicator.remove();
+    currentIndicator = null;
   }
-  
+  if (currentSpinner && currentSpinner.parentElement) {
+    currentSpinner.remove();
+    currentSpinner = null;
+  }
+
+
   const indicator = createIndicator();
   const spinner = createSpinner();
-  
+
   // Store references for cleanup
   currentIndicator = indicator;
   currentSpinner = spinner;
-  
+
   descriptionField.parentElement.style.position = "relative";
   descriptionField.parentElement.appendChild(indicator);
   descriptionField.parentElement.appendChild(spinner);
-  
+
   // Set up highlight tracking for scroll and resize
   setupHighlightTracking(descriptionField);
-  
+
   // Tooltip hide timer
   let tooltipHideTimer = null;
-  
+
   // Function to show tooltip
   const showTooltip = () => {
     // Clear any existing hide timer
@@ -720,14 +894,14 @@ function startChecking(descriptionField) {
       clearTimeout(tooltipHideTimer);
       tooltipHideTimer = null;
     }
-    
+
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !currentTooltip) {
       currentTooltip = document.createElement("div");
       currentTooltip.className = `secret-detector-tooltip theme-${detectGitHubTheme()}`;
       currentTooltip.innerHTML = tooltipHTML;
       descriptionField.parentElement.appendChild(currentTooltip);
-      
+
       // Add event listeners to tooltip to keep it visible when hovering
       currentTooltip.addEventListener("mouseenter", () => {
         if (tooltipHideTimer) {
@@ -735,19 +909,19 @@ function startChecking(descriptionField) {
           tooltipHideTimer = null;
         }
       });
-      
+
       currentTooltip.addEventListener("mouseleave", () => {
         hideTooltipWithDelay();
       });
     }
   };
-  
+
   // Function to hide tooltip with delay
   const hideTooltipWithDelay = () => {
     if (tooltipHideTimer) {
       clearTimeout(tooltipHideTimer);
     }
-    
+
     tooltipHideTimer = setTimeout(() => {
       if (currentTooltip) {
         currentTooltip.remove();
@@ -756,39 +930,48 @@ function startChecking(descriptionField) {
       tooltipHideTimer = null;
     }, 300); // 300ms delay before hiding
   };
-  
+
   // Show tooltip on hover
   indicator.addEventListener("mouseenter", showTooltip);
-  
+
   // Hide tooltip on mouse leave with delay
   indicator.addEventListener("mouseleave", hideTooltipWithDelay);
-  
-  console.log("Starting secret detection with debounced input...");
-  
-  // Perform an immediate check if there's existing content
-  const initialText = descriptionField.value.trim();
+
+  console.log("[IssueGuard] Starting secret detection...");
+
+  // Perform an IMMEDIATE check if there's existing content (critical for modal reopen)
+  const initialText = getElementText(descriptionField).trim();
+  console.log(`[IssueGuard] Initial text length: ${initialText.length}, content: "${initialText.substring(0, 50)}..."`);
   if (initialText.length > 0) {
+    console.log('[IssueGuard] Triggering immediate check for existing content...');
+    // Show spinner immediately so user knows scan is in progress
+    spinner.style.display = "block";
     lastCheckedText = initialText;
     checkDescription(descriptionField, indicator, spinner);
   }
-  
-  // Debounced input listener (Grammarly-like behavior)
-  const handleInput = () => {
-    const currentText = descriptionField.value.trim();
-    
+
+  // Check if this is a ProseMirror/contenteditable element (GitLab rich text editor)
+  const isContentEditable = descriptionField.isContentEditable ||
+    descriptionField.getAttribute('contenteditable') === 'true' ||
+    descriptionField.classList.contains('ProseMirror');
+
+  // Debounced handler for content changes
+  const handleContentChange = () => {
+    const currentText = getElementText(descriptionField).trim();
+
     // Clear existing timer
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    
+
     // IMMEDIATE: Update highlight positions as user types (for real-time positioning)
     if (descriptionField._highlights && descriptionField._highlights.length > 0) {
-      const text = descriptionField.value;
+      const text = getElementText(descriptionField);
       const secretStrings = [...new Set(descriptionField._highlights.map(h => h.secretString))];
-      
+
       // Check if all secrets still exist in the text
       const allSecretsStillExist = secretStrings.every(secret => text.includes(secret));
-      
+
       if (allSecretsStillExist) {
         // Update positions immediately to follow the text
         updateHighlightPositions(descriptionField, secretStrings);
@@ -797,25 +980,92 @@ function startChecking(descriptionField) {
         removeHighlights(descriptionField);
       }
     }
-    
+
     // Only check if text has actually changed
     if (currentText === lastCheckedText) {
       return;
     }
-    
+
     // Set up new debounced check
     debounceTimer = setTimeout(() => {
-      console.log("Running debounced check after user stopped typing...");
+      console.log("[IssueGuard] Running debounced check after content change...");
       lastCheckedText = currentText;
       checkDescription(descriptionField, indicator, spinner);
     }, DEBOUNCE_DELAY_MS);
   };
-  
-  // Attach input listener
-  descriptionField.addEventListener('input', handleInput);
-  
+
+  // Force immediate check (bypasses debounce)
+  const forceImmediateCheck = () => {
+    const currentText = getElementText(descriptionField).trim();
+    if (currentText !== lastCheckedText && currentText.length > 0) {
+      console.log('[IssueGuard] Forcing immediate check...');
+      // Clear any pending debounce timer
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      lastCheckedText = currentText;
+      checkDescription(descriptionField, indicator, spinner);
+    }
+  };
+
+  // For ProseMirror/contenteditable: use MutationObserver to detect ALL changes
+  // This catches typing, pasting, drag-drop, undo/redo, and any programmatic changes
+  if (isContentEditable) {
+    console.log('[IssueGuard] Setting up MutationObserver for ProseMirror/contenteditable...');
+
+    const contentObserver = new MutationObserver((mutations) => {
+      // Check if any mutation actually changed the text content
+      let hasContentChange = false;
+      for (const mutation of mutations) {
+        if (mutation.type === 'characterData' ||
+          mutation.type === 'childList' ||
+          (mutation.type === 'attributes' && mutation.target.nodeType === Node.TEXT_NODE)) {
+          hasContentChange = true;
+          break;
+        }
+      }
+
+      if (hasContentChange) {
+        console.log('[IssueGuard] ProseMirror content change detected via MutationObserver');
+        handleContentChange();
+      }
+    });
+
+    contentObserver.observe(descriptionField, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true
+    });
+
+    // Store for cleanup
+    descriptionField._contentObserver = contentObserver;
+
+    // Also listen for paste on contenteditable (may fire before mutation)
+    descriptionField.addEventListener('paste', () => {
+      console.log('[IssueGuard] Paste event on contenteditable, scheduling immediate check...');
+      setTimeout(forceImmediateCheck, 150);
+    });
+
+    // Listen for drop events (drag and drop)
+    descriptionField.addEventListener('drop', () => {
+      console.log('[IssueGuard] Drop event detected, scheduling immediate check...');
+      setTimeout(forceImmediateCheck, 150);
+    });
+  } else {
+    // For regular textareas: use input event
+    descriptionField.addEventListener('input', handleContentChange);
+
+    // Attach paste listener - triggers IMMEDIATE check
+    descriptionField.addEventListener('paste', () => {
+      console.log('[IssueGuard] Paste event on textarea, scheduling immediate check...');
+      setTimeout(forceImmediateCheck, 100);
+    });
+  }
+
   // Store the handler for cleanup
-  descriptionField._secretDetectorHandler = handleInput;
+  descriptionField._secretDetectorHandler = handleContentChange;
 }
 
 // Clean up previous elements to prevent memory leaks
@@ -825,43 +1075,54 @@ function cleanupPreviousElements() {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
-  
-  // Remove event listener from description field
+
+  // Remove event listener from description field (supports both GitHub and GitLab)
   const descriptionField = document.querySelector('textarea[aria-label="Markdown value"]') ||
-                          document.querySelector('textarea[name="issue[body]"]') ||
-                          document.querySelector('textarea[aria-label="Comment body"]');
-  
+    document.querySelector('textarea[name="issue[body]"]') ||
+    document.querySelector('textarea[aria-label="Comment body"]') ||
+    document.querySelector('#issue-description') ||
+    document.querySelector('textarea[name="issue[description]"]') ||
+    document.querySelector('.js-gfm-input') ||
+    document.querySelector('.ProseMirror');
+
   if (descriptionField) {
     if (descriptionField._secretDetectorHandler) {
       descriptionField.removeEventListener('input', descriptionField._secretDetectorHandler);
       delete descriptionField._secretDetectorHandler;
     }
-    
+
+    // Clean up MutationObserver for ProseMirror/contenteditable
+    if (descriptionField._contentObserver) {
+      descriptionField._contentObserver.disconnect();
+      delete descriptionField._contentObserver;
+    }
+
     // Clean up highlights
     removeHighlights(descriptionField);
-    
+
     // Clean up resize observer
     if (descriptionField._resizeObserver) {
       descriptionField._resizeObserver.disconnect();
       delete descriptionField._resizeObserver;
     }
   }
-  
+
+
   if (currentIndicator && currentIndicator.parentElement) {
     currentIndicator.remove();
     currentIndicator = null;
   }
-  
+
   if (currentSpinner && currentSpinner.parentElement) {
     currentSpinner.remove();
     currentSpinner = null;
   }
-  
+
   if (currentTooltip && currentTooltip.parentElement) {
     currentTooltip.remove();
     currentTooltip = null;
   }
-  
+
   // Clear global highlights
   currentHighlights.forEach(h => {
     if (h.element && h.element.parentElement) {
@@ -869,11 +1130,11 @@ function cleanupPreviousElements() {
     }
   });
   currentHighlights = [];
-  
+
   // Reset last checked text
   lastCheckedText = "";
   isChecking = false;
-  
+
   // Cleanup all comment field monitors
   cleanupAllCommentFields();
 }
@@ -883,10 +1144,10 @@ async function checkForSecrets(description) {
     if (!description || description.length === 0) {
       return { success: true, secrets_detected: 0, all_candidates: [] };
     }
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-    
+
     const response = await fetch("http://localhost:8000/detect", {
       method: "POST",
       headers: {
@@ -897,7 +1158,7 @@ async function checkForSecrets(description) {
     });
 
     clearTimeout(timeoutId);
-    
+
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -917,28 +1178,66 @@ async function checkForSecrets(description) {
 
 
 function handleNewIssuePage() {
-  const descriptionField = document.querySelector('textarea[aria-label="Markdown value"]');
-  console.log("Description field found:", !!descriptionField);
+  const platform = detectPlatform();
+  let descriptionField;
+
+  if (platform === 'gitlab') {
+    // GitLab issue description selectors
+    // GitLab uses various editor types: plain textarea, rich text editor (ProseMirror/Tiptap), or markdown
+    descriptionField = document.querySelector('#issue-description') ||
+      document.querySelector('textarea[name="issue[description]"]') ||
+      document.querySelector('.js-gfm-input') ||
+      document.querySelector('textarea[data-testid="issue-description"]') ||
+      document.querySelector('textarea[placeholder*="Write a comment"]') ||
+      document.querySelector('textarea[placeholder*="Write or drag"]') ||
+      document.querySelector('.ProseMirror') ||
+      document.querySelector('[contenteditable="true"][data-placeholder]') ||
+      document.querySelector('.gl-editor textarea') ||
+      document.querySelector('.md-area textarea') ||
+      document.querySelector('.js-vue-markdown-field textarea');
+  } else {
+    // GitHub issue description selectors
+    descriptionField = document.querySelector('textarea[aria-label="Markdown value"]');
+  }
+
+  console.log(`[${platform}] Description field found:`, !!descriptionField);
 
   if (descriptionField) {
     startChecking(descriptionField);
   } else {
     console.log("Description field not found, setting up observer...");
-    
+
     // Set a timeout to prevent infinite observation
     let observerTimeout;
-    
+
     const observer = new MutationObserver((mutationsList, obs) => {
-      const newDescriptionField = document.querySelector('textarea[aria-label="Markdown value"]');
+      let newDescriptionField;
+
+      if (platform === 'gitlab') {
+        newDescriptionField = document.querySelector('#issue-description') ||
+          document.querySelector('textarea[name="issue[description]"]') ||
+          document.querySelector('.js-gfm-input') ||
+          document.querySelector('textarea[data-testid="issue-description"]') ||
+          document.querySelector('textarea[placeholder*="Write a comment"]') ||
+          document.querySelector('textarea[placeholder*="Write or drag"]') ||
+          document.querySelector('.ProseMirror') ||
+          document.querySelector('[contenteditable="true"][data-placeholder]') ||
+          document.querySelector('.gl-editor textarea') ||
+          document.querySelector('.md-area textarea') ||
+          document.querySelector('.js-vue-markdown-field textarea');
+      } else {
+        newDescriptionField = document.querySelector('textarea[aria-label="Markdown value"]');
+      }
+
       if (newDescriptionField) {
         obs.disconnect();
         clearTimeout(observerTimeout);
         startChecking(newDescriptionField);
       }
     });
-    
+
     observer.observe(document.body, { childList: true, subtree: true });
-    
+
     // Stop observing after 10 seconds to prevent memory issues
     observerTimeout = setTimeout(() => {
       observer.disconnect();
@@ -948,25 +1247,51 @@ function handleNewIssuePage() {
 }
 
 function handleEditIssuePage() {
-  // For edit page, look for the comment textarea or issue body textarea
-  const descriptionField = document.querySelector('textarea[name="issue[body]"]') || 
-                          document.querySelector('textarea[aria-label="Comment body"]') ||
-                          document.querySelector('textarea[aria-label="Markdown value"]');
-  
-  console.log("Edit page - Description field found:", !!descriptionField);
+  const platform = detectPlatform();
+  let descriptionField;
+
+  if (platform === 'gitlab') {
+    // GitLab issue body/comment selectors (multiple editor types)
+    descriptionField = document.querySelector('#issue-description') ||
+      document.querySelector('textarea[name="issue[description]"]') ||
+      document.querySelector('.js-gfm-input') ||
+      document.querySelector('#note_note') ||
+      document.querySelector('textarea[name="note[note]"]') ||
+      document.querySelector('textarea[data-testid="issue-description"]') ||
+      document.querySelector('textarea[placeholder*="Write a comment"]') ||
+      document.querySelector('textarea[placeholder*="Write or drag"]') ||
+      document.querySelector('.ProseMirror') ||
+      document.querySelector('[contenteditable="true"][data-placeholder]') ||
+      document.querySelector('.gl-editor textarea') ||
+      document.querySelector('.md-area textarea') ||
+      document.querySelector('.js-vue-markdown-field textarea');
+  } else {
+    // GitHub issue body/comment selectors
+    descriptionField = document.querySelector('textarea[name="issue[body]"]') ||
+      document.querySelector('textarea[aria-label="Comment body"]') ||
+      document.querySelector('textarea[aria-label="Markdown value"]');
+  }
+
+  console.log(`[${platform}] Edit page - Description field found:`, !!descriptionField);
 
   if (descriptionField && !descriptionField._secretDetectorHandler) {
     startChecking(descriptionField);
   }
-  
+
   // Set up persistent observer for issue body edits
   if (!window._issueBodyObserver) {
     console.log("Setting up persistent issue body observer...");
-    
+
     const observer = new MutationObserver((mutationsList) => {
-      // Look for newly appeared or modified textareas
-      const allTextareas = document.querySelectorAll('textarea[name="issue[body]"], textarea[aria-label="Comment body"], textarea[aria-label="Markdown value"]');
-      
+      // Look for newly appeared or modified textareas (supports both platforms)
+      let allTextareas;
+
+      if (platform === 'gitlab') {
+        allTextareas = document.querySelectorAll('#issue-description, textarea[name="issue[description]"], .js-gfm-input, #note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"], .ProseMirror, [contenteditable="true"][data-placeholder], .gl-editor textarea, .md-area textarea, .js-vue-markdown-field textarea');
+      } else {
+        allTextareas = document.querySelectorAll('textarea[name="issue[body]"], textarea[aria-label="Comment body"], textarea[aria-label="Markdown value"]');
+      }
+
       allTextareas.forEach(textarea => {
         // Only attach if not already monitoring
         if (textarea && !textarea._secretDetectorHandler && textarea.offsetParent !== null) {
@@ -975,20 +1300,20 @@ function handleEditIssuePage() {
         }
       });
     });
-    
-    observer.observe(document.body, { 
-      childList: true, 
+
+    observer.observe(document.body, {
+      childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['readonly', 'disabled', 'style', 'class']
     });
-    
+
     window._issueBodyObserver = observer;
   }
-  
+
   // Also monitor comment fields on issue pages
   monitorCommentFields();
-  
+
   // Watch for edit button clicks
   watchForEditButtons();
 }
@@ -996,28 +1321,28 @@ function handleEditIssuePage() {
 // Watch for edit button clicks on issue pages
 function watchForEditButtons() {
   console.log("Setting up edit button watcher...");
-  
+
   // Use event delegation to catch edit button clicks
   document.body.addEventListener('click', (event) => {
     const target = event.target;
-    
+
     // Check if it's an edit button or contains edit text
     const isEditButton = target.matches('button[aria-label*="dit" i], button[title*="dit" i], .js-comment-edit-button, [data-edit-text]') ||
-                         target.closest('button[aria-label*="dit" i], button[title*="dit" i], .js-comment-edit-button, [data-edit-text]');
-    
+      target.closest('button[aria-label*="dit" i], button[title*="dit" i], .js-comment-edit-button, [data-edit-text]');
+
     if (isEditButton) {
       console.log("Edit button clicked, waiting for textarea to appear...");
-      
+
       // Wait a bit for the textarea to appear after clicking edit
       setTimeout(() => {
         // Try to find the textarea that appeared
         const allTextareas = document.querySelectorAll('textarea[name="issue[body]"], textarea[aria-label="Comment body"], textarea[aria-label="Markdown value"], textarea[placeholder*="comment" i]');
-        
+
         allTextareas.forEach(textarea => {
           // Check if this textarea is visible and not already monitored
           if (textarea && !textarea._secretDetectorHandler && textarea.offsetParent !== null) {
             console.log("Found newly editable textarea after edit button click");
-            
+
             // Check if it's an issue body or a comment
             if (textarea.name === 'issue[body]' || textarea.getAttribute('aria-label') === 'Markdown value') {
               startChecking(textarea);
@@ -1042,28 +1367,42 @@ const activeCommentMonitors = new Map();
 
 function monitorCommentFields() {
   console.log("Setting up comment field monitoring...");
-  
-  // Find all comment textareas on the page
-  const commentFields = document.querySelectorAll('textarea[placeholder*="Use Markdown to format your comment"], textarea[placeholder*="comment" i]');
-  
-  console.log(`Found ${commentFields.length} comment fields`);
-  
+
+  const platform = detectPlatform();
+  let commentFields;
+
+  if (platform === 'gitlab') {
+    // GitLab comment field selectors
+    commentFields = document.querySelectorAll('#note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]');
+  } else {
+    // GitHub comment field selectors
+    commentFields = document.querySelectorAll('textarea[placeholder*="Use Markdown to format your comment"], textarea[placeholder*="comment" i]');
+  }
+
+  console.log(`[${platform}] Found ${commentFields.length} comment fields`);
+
   commentFields.forEach((commentField, index) => {
     // Skip if already monitoring this field or if it's not visible
     if (activeCommentMonitors.has(commentField) || commentField.offsetParent === null) {
       console.log(`Comment field ${index} already being monitored or not visible`);
       return;
     }
-    
+
     console.log(`Starting monitoring for comment field ${index}`);
     startCheckingCommentField(commentField, index);
   });
-  
+
   // Set up observer to watch for new comment fields (when user clicks "Add a comment", etc.)
   if (!window._commentFieldObserver) {
     const commentObserver = new MutationObserver((mutations) => {
-      const newCommentFields = document.querySelectorAll('textarea[placeholder*="Use Markdown to format your comment"], textarea[placeholder*="comment" i]');
-      
+      let newCommentFields;
+
+      if (platform === 'gitlab') {
+        newCommentFields = document.querySelectorAll('#note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]');
+      } else {
+        newCommentFields = document.querySelectorAll('textarea[placeholder*="Use Markdown to format your comment"], textarea[placeholder*="comment" i]');
+      }
+
       newCommentFields.forEach((field, index) => {
         // Only start monitoring if not already monitored and field is visible
         if (!activeCommentMonitors.has(field) && field.offsetParent !== null) {
@@ -1072,14 +1411,14 @@ function monitorCommentFields() {
         }
       });
     });
-    
-    commentObserver.observe(document.body, { 
-      childList: true, 
+
+    commentObserver.observe(document.body, {
+      childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['style', 'class', 'readonly', 'disabled']
     });
-    
+
     // Store observer for cleanup
     window._commentFieldObserver = commentObserver;
   }
@@ -1088,7 +1427,7 @@ function monitorCommentFields() {
 function startCheckingCommentField(commentField, fieldIndex) {
   const indicator = createIndicator();
   const spinner = createSpinner();
-  
+
   // Store references for this specific field
   const fieldData = {
     indicator,
@@ -1100,20 +1439,20 @@ function startCheckingCommentField(commentField, fieldIndex) {
     inputHandler: null,
     highlights: []
   };
-  
+
   activeCommentMonitors.set(commentField, fieldData);
-  
+
   // Ensure parent has relative positioning
   commentField.parentElement.style.position = "relative";
   commentField.parentElement.appendChild(indicator);
   commentField.parentElement.appendChild(spinner);
-  
+
   // Set up highlight tracking for scroll and resize
   setupHighlightTracking(commentField);
-  
+
   // Tooltip hide timer
   let tooltipHideTimer = null;
-  
+
   // Function to show tooltip
   const showTooltip = () => {
     // Clear any existing hide timer
@@ -1121,14 +1460,14 @@ function startCheckingCommentField(commentField, fieldIndex) {
       clearTimeout(tooltipHideTimer);
       tooltipHideTimer = null;
     }
-    
+
     const tooltipHTML = indicator.getAttribute('data-tooltip');
     if (tooltipHTML && !fieldData.tooltip) {
       fieldData.tooltip = document.createElement("div");
       fieldData.tooltip.className = `secret-detector-tooltip theme-${detectGitHubTheme()}`;
       fieldData.tooltip.innerHTML = tooltipHTML;
       commentField.parentElement.appendChild(fieldData.tooltip);
-      
+
       // Add event listeners to tooltip to keep it visible when hovering
       fieldData.tooltip.addEventListener("mouseenter", () => {
         if (tooltipHideTimer) {
@@ -1136,19 +1475,19 @@ function startCheckingCommentField(commentField, fieldIndex) {
           tooltipHideTimer = null;
         }
       });
-      
+
       fieldData.tooltip.addEventListener("mouseleave", () => {
         hideTooltipWithDelay();
       });
     }
   };
-  
+
   // Function to hide tooltip with delay
   const hideTooltipWithDelay = () => {
     if (tooltipHideTimer) {
       clearTimeout(tooltipHideTimer);
     }
-    
+
     tooltipHideTimer = setTimeout(() => {
       if (fieldData.tooltip) {
         fieldData.tooltip.remove();
@@ -1157,47 +1496,47 @@ function startCheckingCommentField(commentField, fieldIndex) {
       tooltipHideTimer = null;
     }, 300); // 300ms delay before hiding
   };
-  
+
   // Show tooltip on hover
   indicator.addEventListener("mouseenter", showTooltip);
-  
+
   // Hide tooltip on mouse leave with delay
   indicator.addEventListener("mouseleave", hideTooltipWithDelay);
-  
+
   // Perform an immediate check if there's existing content
-  const initialText = commentField.value.trim();
+  const initialText = getElementText(commentField).trim();
   if (initialText.length > 0) {
     fieldData.lastCheckedText = initialText;
     checkCommentField(commentField, fieldData);
   }
-  
+
   // Debounced input listener
   const handleInput = () => {
-    const currentText = commentField.value.trim();
-    
+    const currentText = getElementText(commentField).trim();
+
     // Clear existing timer
     if (fieldData.debounceTimer) {
       clearTimeout(fieldData.debounceTimer);
     }
-    
+
     // Check if any highlighted strings no longer exist in the text
     if (commentField._highlights && commentField._highlights.length > 0) {
       const stillValid = commentField._highlights.filter(h => {
-        const text = commentField.value;
+        const text = getElementText(commentField);
         return text.includes(h.secretString);
       });
-      
+
       // If some highlights are no longer valid, remove all and let backend re-check
       if (stillValid.length !== commentField._highlights.length) {
         removeHighlights(commentField);
       }
     }
-    
+
     // Only check if text has actually changed
     if (currentText === fieldData.lastCheckedText) {
       return;
     }
-    
+
     // Set up new debounced check
     fieldData.debounceTimer = setTimeout(() => {
       console.log(`Running debounced check for comment field ${fieldIndex}...`);
@@ -1205,11 +1544,30 @@ function startCheckingCommentField(commentField, fieldIndex) {
       checkCommentField(commentField, fieldData);
     }, DEBOUNCE_DELAY_MS);
   };
-  
+
   // Attach input listener
   commentField.addEventListener('input', handleInput);
+
+  // Attach paste listener - triggers IMMEDIATE check after paste content is inserted (GitLab fix)
+  commentField.addEventListener('paste', () => {
+    // Wait for paste content to be inserted, then force immediate check
+    setTimeout(() => {
+      const currentText = getElementText(commentField).trim();
+      if (currentText !== fieldData.lastCheckedText && currentText.length > 0) {
+        console.log('[IssueGuard] Paste detected in comment field, triggering immediate check...');
+        // Clear any pending debounce timer
+        if (fieldData.debounceTimer) {
+          clearTimeout(fieldData.debounceTimer);
+          fieldData.debounceTimer = null;
+        }
+        fieldData.lastCheckedText = currentText;
+        checkCommentField(commentField, fieldData);
+      }
+    }, 100);
+  });
+
   fieldData.inputHandler = handleInput;
-  
+
   // Watch for field removal
   const removalObserver = new MutationObserver((mutations) => {
     if (!document.contains(commentField)) {
@@ -1218,7 +1576,7 @@ function startCheckingCommentField(commentField, fieldIndex) {
       removalObserver.disconnect();
     }
   });
-  
+
   removalObserver.observe(document.body, { childList: true, subtree: true });
   fieldData.removalObserver = removalObserver;
 }
@@ -1229,10 +1587,10 @@ async function checkCommentField(commentField, fieldData) {
     console.log("Check already in progress for this comment field, skipping...");
     return;
   }
-  
+
   fieldData.isChecking = true;
-  const text = commentField.value.trim();
-  
+  const text = getElementText(commentField).trim();
+
   try {
     fieldData.spinner.style.display = "block";
     const response = await checkForSecrets(text);
@@ -1248,27 +1606,27 @@ async function checkCommentField(commentField, fieldData) {
         fieldData.indicator.style.border = "3px solid #d32f2f";
         fieldData.indicator.style.boxShadow = "0 4px 16px rgba(244, 67, 54, 0.3)";
         fieldData.indicator.style.animation = "pulseRed 2s infinite";
-        
+
         // Filter to only secrets (not safe candidates)
         const secretCandidates = response.all_candidates.filter(c => c.is_secret);
-        
+
         // Remove candidates that are substrings of other candidates
         const filteredSecrets = secretCandidates.filter((candidate, index, arr) => {
           return !arr.some((other, otherIndex) => {
             if (index === otherIndex) return false;
-            return other.candidate_string.includes(candidate.candidate_string) && 
-                   other.candidate_string !== candidate.candidate_string;
+            return other.candidate_string.includes(candidate.candidate_string) &&
+              other.candidate_string !== candidate.candidate_string;
           });
         });
-        
+
         // Highlight the secret strings in the textarea
         const secretStrings = filteredSecrets.map(s => s.candidate_string);
         updateHighlightPositions(commentField, secretStrings);
-        
+
         // Create detailed tooltip content
         const itemStyles = getTooltipItemStyles();
         let tooltipHTML = `<div style="font-weight: 700; margin-bottom: 12px; font-size: 15px;">⚠️ Secrets Detected</div>`;
-        
+
         filteredSecrets.forEach((candidate, i) => {
           tooltipHTML += `<div style="margin: 10px 0; padding: 10px; background: ${itemStyles.background}; border-radius: 8px; border-left: ${itemStyles.borderLeft};">`;
           tooltipHTML += `<span class="secret-badge theme-${detectGitHubTheme()}">🔴 SECRET</span>`;
@@ -1276,19 +1634,19 @@ async function checkCommentField(commentField, fieldData) {
           tooltipHTML += `<div style="margin-top: 4px; font-size: 11px; opacity: 0.8;">Type: ${escapeHtml(candidate.secret_type)}</div>`;
           tooltipHTML += `</div>`;
         });
-        
+
         fieldData.indicator.setAttribute('data-tooltip', tooltipHTML);
       } else {
         // Green indicator - no secrets
         // Remove any existing highlights
         removeHighlights(commentField);
-        
+
         fieldData.indicator.innerHTML = "✅";
         fieldData.indicator.style.backgroundColor = "#4caf50";
         fieldData.indicator.style.border = "3px solid #388e3c";
         fieldData.indicator.style.boxShadow = "0 4px 16px rgba(76, 175, 80, 0.3)";
         fieldData.indicator.style.animation = "pulse 2s infinite";
-        
+
         const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">✅ You're Safe!</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">No secrets detected in your comment</div>`;
         fieldData.indicator.setAttribute('data-tooltip', tooltipHTML);
       }
@@ -1299,19 +1657,19 @@ async function checkCommentField(commentField, fieldData) {
       fieldData.indicator.style.border = "3px solid #f57c00";
       fieldData.indicator.style.boxShadow = "0 4px 16px rgba(255, 152, 0, 0.3)";
       fieldData.indicator.style.animation = "pulse 2s infinite";
-      
+
       const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">⚠️ Connection Error</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">Unable to check for secrets. Please ensure the API is running.</div>`;
       fieldData.indicator.setAttribute('data-tooltip', tooltipHTML);
     }
   } catch (error) {
     console.error("Error in checkCommentField:", error);
     fieldData.spinner.style.display = "none";
-    
+
     fieldData.indicator.innerHTML = "❌";
     fieldData.indicator.style.backgroundColor = "#ff9800";
     fieldData.indicator.style.border = "3px solid #f57c00";
     fieldData.indicator.style.boxShadow = "0 4px 16px rgba(255, 152, 0, 0.3)";
-    
+
     const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">❌ Error</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">An error occurred while checking</div>`;
     fieldData.indicator.setAttribute('data-tooltip', tooltipHTML);
   } finally {
@@ -1321,67 +1679,67 @@ async function checkCommentField(commentField, fieldData) {
 
 function cleanupCommentField(commentField) {
   const fieldData = activeCommentMonitors.get(commentField);
-  
+
   if (!fieldData) return;
-  
+
   // Clear debounce timer
   if (fieldData.debounceTimer) {
     clearTimeout(fieldData.debounceTimer);
   }
-  
+
   // Remove event listener
   if (fieldData.inputHandler) {
     commentField.removeEventListener('input', fieldData.inputHandler);
   }
-  
+
   // Remove highlights
   removeHighlights(commentField);
-  
+
   // Clean up resize observer
   if (commentField._resizeObserver) {
     commentField._resizeObserver.disconnect();
     delete commentField._resizeObserver;
   }
-  
+
   // Remove DOM elements
   if (fieldData.indicator && fieldData.indicator.parentElement) {
     fieldData.indicator.remove();
   }
-  
+
   if (fieldData.spinner && fieldData.spinner.parentElement) {
     fieldData.spinner.remove();
   }
-  
+
   if (fieldData.tooltip && fieldData.tooltip.parentElement) {
     fieldData.tooltip.remove();
   }
-  
+
   // Disconnect removal observer
   if (fieldData.removalObserver) {
     fieldData.removalObserver.disconnect();
   }
-  
+
   // Remove from active monitors
   activeCommentMonitors.delete(commentField);
 }
 
 function cleanupAllCommentFields() {
   console.log("Cleaning up all comment field monitors...");
-  
+
   // Cleanup all active monitors
   activeCommentMonitors.forEach((fieldData, commentField) => {
     cleanupCommentField(commentField);
   });
-  
+
   // Clear the map
   activeCommentMonitors.clear();
-  
+
   // Disconnect the comment observer
   if (window._commentFieldObserver) {
     window._commentFieldObserver.disconnect();
     window._commentFieldObserver = null;
   }
-  
+
   // Disconnect the issue body observer
   if (window._issueBodyObserver) {
     window._issueBodyObserver.disconnect();
@@ -1391,16 +1749,38 @@ function cleanupAllCommentFields() {
 
 function checkCurrentPage() {
   const pathname = window.location.pathname;
-  const newIssuePattern = /\/[^/]+\/[^/]+\/issues\/new\/?$/;
-  const editIssuePattern = /\/[^/]+\/[^/]+\/issues\/\d+$/;
-  
-  if (newIssuePattern.test(pathname)) {
+  const platform = detectPlatform();
+
+  // GitHub URL patterns
+  const githubNewIssuePattern = /\/[^/]+\/[^/]+\/issues\/new\/?$/;
+  const githubEditIssuePattern = /\/[^/]+\/[^/]+\/issues\/\d+$/;
+
+  // GitLab URL patterns (uses /-/ in the path)
+  // GitLab new issue can be accessed via /issues/new OR via modal from /issues list page
+  const gitlabNewIssuePattern = /-\/issues\/new\/?$/;
+  const gitlabEditIssuePattern = /-\/issues\/\d+$/;
+  const gitlabIssuesListPattern = /-\/issues\/?$/;  // Issues list page (can have new issue modal)
+
+  let isNewIssuePage = false;
+  let isEditIssuePage = false;
+
+  if (platform === 'gitlab') {
+    isNewIssuePage = gitlabNewIssuePattern.test(pathname) || gitlabIssuesListPattern.test(pathname);
+    isEditIssuePage = gitlabEditIssuePattern.test(pathname);
+  } else {
+    isNewIssuePage = githubNewIssuePattern.test(pathname);
+    isEditIssuePage = githubEditIssuePattern.test(pathname);
+  }
+
+  console.log(`Platform: ${platform}, Path: ${pathname}, IsNew: ${isNewIssuePage}, IsEdit: ${isEditIssuePage}`);
+
+  if (isNewIssuePage) {
     console.log("On new issue page, starting detection");
     // Small delay to ensure DOM is ready
     setTimeout(() => {
       handleNewIssuePage();
     }, 500);
-  } else if (editIssuePattern.test(pathname)) {
+  } else if (isEditIssuePage) {
     console.log("On issue view/edit page, starting detection");
     // Small delay to ensure DOM is ready
     setTimeout(() => {
@@ -1414,13 +1794,13 @@ function checkCurrentPage() {
 
 function init() {
   console.log("Secret Detector Extension initialized");
-  
+
   // Check initial page load
   checkCurrentPage();
-  
+
   // Modern approach: Use both popstate and custom event for SPAs
   let lastUrl = location.href;
-  
+
   // Listen for URL changes (works with GitHub's SPA navigation)
   const urlObserver = new MutationObserver(() => {
     const url = location.href;
@@ -1430,31 +1810,206 @@ function init() {
       checkCurrentPage();
     }
   });
-  
+
   urlObserver.observe(document, { subtree: true, childList: true });
-  
+
   // Also listen for popstate (browser back/forward)
   window.addEventListener('popstate', () => {
     console.log("Popstate event detected");
     setTimeout(() => checkCurrentPage(), 100);
   });
-  
+
   // Listen for pushState/replaceState (SPA navigation)
   const originalPushState = history.pushState;
   const originalReplaceState = history.replaceState;
-  
-  history.pushState = function() {
+
+  history.pushState = function () {
     originalPushState.apply(this, arguments);
     console.log("pushState detected");
     setTimeout(() => checkCurrentPage(), 100);
   };
-  
-  history.replaceState = function() {
+
+  history.replaceState = function () {
     originalReplaceState.apply(this, arguments);
     console.log("replaceState detected");
     setTimeout(() => checkCurrentPage(), 100);
   };
 }
+
+// ============================================================================
+// GITLAB MODAL WATCHER
+// ============================================================================
+// Watch for GitLab modal open/close/reopen to reinitialize the extension
+// This fixes the issue where closing and reopening the new issue modal
+// causes the extension functionality to disappear
+function setupGitLabModalWatcher() {
+  if (detectPlatform() !== 'gitlab') return;
+
+  console.log('[IssueGuard] Setting up GitLab modal watcher...');
+
+  // Debounce timer to prevent rapid re-initialization
+  let initDebounceTimer = null;
+  let lastInitTime = 0;
+  const MIN_INIT_INTERVAL = 500; // Minimum 500ms between initializations
+
+  // Function to safely initialize the extension for GitLab
+  const safeInitialize = () => {
+    const now = Date.now();
+
+    // Prevent too-frequent reinitializations
+    if (now - lastInitTime < MIN_INIT_INTERVAL) {
+      console.log('[IssueGuard] Skipping init - too soon after last init');
+      return;
+    }
+
+    // Check if ProseMirror editor exists and needs monitoring
+    // IMPORTANT: Check for VISIBILITY to ensure we don't attach to hidden/closed editors
+    const allProseMirrors = document.querySelectorAll('.ProseMirror');
+    const allDescriptions = document.querySelectorAll('#issue-description, textarea[name="issue[description]"], .js-gfm-input');
+
+    let editorField = null;
+
+    // Find first visible ProseMirror
+    for (const el of allProseMirrors) {
+      if (el.offsetParent !== null) {
+        editorField = el;
+        break;
+      }
+    }
+
+    // If no ProseMirror, check descriptions
+    if (!editorField) {
+      for (const el of allDescriptions) {
+        if (el.offsetParent !== null) {
+          editorField = el;
+          break;
+        }
+      }
+    }
+
+    if (editorField) {
+      // Check if already being monitored AND indicator exists
+      // If indicator is gone (modal was closed/reopened), we need to reinitialize
+      const existingIndicator = editorField.parentElement?.querySelector('.secret-detector-indicator');
+      if (editorField._secretDetectorHandler && existingIndicator) {
+        console.log('[IssueGuard] Editor already being monitored with indicator present');
+
+        // Even if monitored, check if there's content that needs scanning in case it was just restored
+        const text = getElementText(editorField).trim();
+        if (text.length > 0 && text !== lastCheckedText) {
+          console.log('[IssueGuard] Content changed/restored, forcing scan...');
+          // Force reset lastCheckedText to ensure scan runs
+          lastCheckedText = "";
+          const spinner = editorField.parentElement?.querySelector('.secret-detector-spinner');
+          if (spinner) spinner.style.display = "block";
+          checkDescription(editorField, existingIndicator, spinner);
+        }
+        return;
+      }
+
+      console.log('[IssueGuard] Found visible editor, initializing...');
+      lastInitTime = now;
+
+      // Reset global state to ensure clean start
+      lastCheckedText = "";
+
+      // Start monitoring - startChecking will handle cleanup if needed
+      startChecking(editorField);
+
+      // POLLING: Schedule multiple checks to catch content that loads asynchronously
+      // This is critical for when GitLab restores draft content after the editor appears
+      let checkCount = 0;
+      const maxChecks = 5;
+
+      const pollContent = () => {
+        checkCount++;
+        const text = getElementText(editorField).trim();
+        console.log(`[IssueGuard] Polling check ${checkCount}/${maxChecks}: length=${text.length}`);
+
+        if (text.length > 0) {
+          // If we have text and haven't scanned it yet (or last scan was empty)
+          if (text !== lastCheckedText) {
+            console.log('[IssueGuard] Polling found new content, triggering scan...');
+            const indicator = editorField.parentElement?.querySelector('.secret-detector-indicator');
+            const spinner = editorField.parentElement?.querySelector('.secret-detector-spinner');
+
+            if (indicator && spinner) {
+              spinner.style.display = "block";
+              lastCheckedText = text; // Update this BEFORE calling to prevent loops if logic changes
+              checkDescription(editorField, indicator, spinner);
+            }
+            return; // Stop polling if successful
+          }
+        }
+
+        // Continue polling if no text found or text hasn't changed
+        if (checkCount < maxChecks) {
+          setTimeout(pollContent, 500);
+        }
+      };
+
+      // Start polling after a short delay
+      setTimeout(pollContent, 500);
+    }
+  };
+
+  // Watch for new modals/drawers being added that contain editors
+  const modalObserver = new MutationObserver((mutations) => {
+    // Only process if we're actually on a GitLab issues page
+    const pathname = window.location.pathname;
+    if (!pathname.includes('issues')) return;
+
+    let shouldCheck = false;
+
+    for (const mutation of mutations) {
+      // Check for added nodes that might contain an editor
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          // Check if this node or its children contain editor elements
+          const hasProseMirror = node.classList?.contains('ProseMirror') ||
+            node.querySelector?.('.ProseMirror');
+          const hasIssueForm = node.querySelector?.('#issue-description') ||
+            node.querySelector?.('textarea[name="issue[description]"]') ||
+            node.querySelector?.('.js-gfm-input') ||
+            node.classList?.contains('issue-form') ||
+            node.classList?.contains('gl-modal') ||
+            node.classList?.contains('gl-drawer');
+
+          if (hasProseMirror || hasIssueForm) {
+            shouldCheck = true;
+            break;
+          }
+        }
+      }
+      if (shouldCheck) break;
+    }
+
+    if (shouldCheck) {
+      console.log('[IssueGuard] Modal/editor mutation detected...');
+
+      // Debounce the initialization
+      if (initDebounceTimer) {
+        clearTimeout(initDebounceTimer);
+      }
+
+      initDebounceTimer = setTimeout(() => {
+        safeInitialize();
+      }, 300);
+    }
+  });
+
+  modalObserver.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+
+  // Store reference for potential cleanup
+  window._gitlabModalObserver = modalObserver;
+
+  // Also check immediately in case modal is already open
+  setTimeout(safeInitialize, 500);
+}
+
 
 // ============================================================================
 // THEME CHANGE OBSERVER
@@ -1463,20 +2018,20 @@ function init() {
 function setupThemeObserver() {
   const themeObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
-      if (mutation.type === 'attributes' && 
-          (mutation.attributeName === 'data-color-mode' || 
-           mutation.attributeName === 'data-theme' || 
-           mutation.attributeName === 'class')) {
+      if (mutation.type === 'attributes' &&
+        (mutation.attributeName === 'data-color-mode' ||
+          mutation.attributeName === 'data-theme' ||
+          mutation.attributeName === 'class')) {
         console.log('GitHub theme changed, updating tooltips...');
-        
+
         // Update all existing tooltips
         const currentTheme = detectGitHubTheme();
-        
+
         // Update main tooltip if exists
         if (currentTooltip) {
           currentTooltip.className = `secret-detector-tooltip theme-${currentTheme}`;
         }
-        
+
         // Update all comment field tooltips
         activeCommentMonitors.forEach((fieldData) => {
           if (fieldData.tooltip) {
@@ -1486,18 +2041,18 @@ function setupThemeObserver() {
       }
     });
   });
-  
+
   // Observe both html and body elements for theme changes
   themeObserver.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ['data-color-mode', 'data-theme', 'class']
   });
-  
+
   themeObserver.observe(document.body, {
     attributes: true,
     attributeFilter: ['data-color-mode', 'data-theme', 'class']
   });
-  
+
   console.log('Theme observer initialized');
 }
 
@@ -1508,3 +2063,4 @@ window.addEventListener('beforeunload', () => {
 
 init();
 setupThemeObserver();
+setupGitLabModalWatcher();
