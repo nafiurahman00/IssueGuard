@@ -29,11 +29,6 @@ git clone https://github.com/nafiurahman00/IssueGuard.git
 cd IssueGuard
 ```
 
-### Install Python Dependencies
-```bash
-pip install -r requirements_fastapi.txt
-```
-
 ### Download the Model
 Download the pre-trained CodeBERT model from GitHub releases:
 
@@ -45,6 +40,19 @@ After extraction, verify that the model files are present at:
 `models/balanced/microsoft_codebert-base_complete/`
 
 ### Start the FastAPI Server
+
+**Option 1: Using Docker (Recommended)**
+```bash
+docker compose up --build
+```
+> Requires [Docker](https://docs.docker.com/get-docker/) and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for GPU support.
+
+**Option 2: Run Directly**
+
+### Install Python Dependencies
+```bash
+pip install -r requirements_fastapi.txt
+```
 ```bash
 python main.py
 ```
